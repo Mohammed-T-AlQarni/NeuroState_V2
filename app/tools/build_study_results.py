@@ -222,7 +222,15 @@ def main(argv=None) -> int:
     ap.add_argument("--recordings-ingested", type=int)
     ap.add_argument("--recordings-processed", type=int)
     ap.add_argument("--eligible-available", type=int, help="eligible patients available but not yet in the cohort")
+    ap.add_argument("--inventory", type=Path, help="inventory folder from tuep_inventory.py: recordings ingested = EDF "
+                                                   "files listed, recordings processed = files prepared")
     a = ap.parse_args(argv)
+    if a.inventory:
+        inv = pd.read_csv(a.inventory / "inventory_recordings.csv")
+        if a.recordings_ingested is None:
+            a.recordings_ingested = int(len(inv))
+        if a.recordings_processed is None:
+            a.recordings_processed = int((inv.status == "prepared").sum())
     d = build(a.run, a.study, a.labels, a.model, a.metric, a.recordings_ingested, a.recordings_processed,
               a.eligible_available)
     a.out.parent.mkdir(parents=True, exist_ok=True)

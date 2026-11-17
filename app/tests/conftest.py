@@ -27,3 +27,7 @@ def sample_run(pa):
     if not (SAMPLE.exists() and TEMPLATE.exists()):
         pytest.skip("run app/tools/fetch_public_inputs.py first")
     return pa.run_pipeline(str(SAMPLE), source="sample")
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "slow: runs run_experiment.py end to end on a synthetic cohort")

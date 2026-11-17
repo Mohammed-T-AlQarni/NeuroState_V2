@@ -97,13 +97,62 @@ Which field switches on which panel:
 
 A file written from training alone (no held-out test yet) should use `status: "trained"` and leave out `evaluation`. The converter sets `evaluated` only when `fold_metrics.csv` and `oof_predictions.csv` (test folds) exist.
 
+## 3b. TUEP (TUH EEG Epilepsy Corpus): inventory, then preparation, then training
+
+The data are under TUH's data use agreement: keep them, and everything derived from them, under the git-ignored
+`data/` folder (the tools' defaults). Run these on the computer that holds the download.
+
+```bash
+experiments/.venv/bin/python app/tools/tuep_inventory.py --root /path/to/tuh_eeg_epilepsy/v3.1.0
+```
+
+Writes `data/tuep/inventory/`: one row per EDF (`inventory_recordings.csv`), per session with every spreadsheet column
+linked (`inventory_sessions.csv`), per patient (`inventory_patients.csv`), and `inventory_summary.md` /
+`inventory_checks.json`. Read the summary before anything else. It reports:
+- counts per class against the README (100/100 patients, 530/168 sessions, 2,244/564 files);
+- patients under both class folders (left out of preparation), duplicate files, and the same signal under a
+  different header (data-only SHA-256), flagged when they cross patients;
+- TUSZ overlap per session from `DOCS/sessions_common_with_tusz.list` / `sessions_unique_to_tuep.list`;
+- the spreadsheet `DOCS/metadata_v00r.xlsx`: every sheet's columns, which columns were used as the session key, how
+  many sessions linked, metadata rows with no EEG, duplicated keys, and the values of diagnosis-like columns per class
+  (for review: the class folder stays the label). If the key columns are guessed wrong, pass
+  `--meta-sheet`, `--meta-patient-col`, `--meta-session-col`;
+- possible confounds by class: hours per patient, sessions per patient, sampling rates, montage folders, years,
+  seizures.
+`--overlap tusz=ids.txt` (repeatable) flags patients listed in another source, for when the cohort is extended.
+
+```bash
+experiments/.venv/bin/python app/tools/tuep_prepare.py --root /path/to/tuh_eeg_epilepsy/v3.1.0
+```
+
+Writes `data/tuep/prepared/`: **one `sub-<patient>.npz` per patient** in prep.py's format, `subjects.csv` (Group E =
+epilepsy, N = no epilepsy), `status.csv` (what happened to each recording) and `prepare_settings.json`. Defaults:
+- at most 30 minutes per patient, recordings in session order (`--order spread` takes one per session in turn);
+- annotated seizures ± 60 s cut out (interictal EEG); `--include-seizures` only for a sensitivity analysis;
+- every piece prepared exactly as prep.py and trimmed to whole 4-s windows, so no evaluation window spans two pieces.
+
+Then train with the existing code, unchanged (from `experiments/`):
+
+```bash
+.venv/bin/python run_experiment.py --prep ../data/tuep/prepared --out ../results/epilepsy_seqcnn --groups E N --models baseline seqcnn --ms-input onehot --skip-leak --repeats 3
+```
+
+Because each row of `subjects.csv` is a patient, its folds are patient-level: all of a patient's recordings are in
+training or in testing together. Re-run the inventory after preparation to fold `status.csv` into it, then fill the
+study page with `build_study_results.py ... --inventory data/tuep/inventory` (recording counts come from the
+inventory).
+
+Tested on a synthetic TUEP-shaped tree (`app/tests/tuep_fixture.py`, `test_tuep.py`), including a full
+`run_experiment.py` run that puts every patient in exactly one test fold. Re-check on the real release: the folder
+and file naming, the annotation file format, the spreadsheet's key columns, and the session-list format.
+
 ## 4. Tests
 
 ```bash
 NODE_PATH=$(npm root -g) experiments/.venv/bin/python -m pytest app/tests -q
 ```
 
-Result here: **29 passed** (about 100 s), including **22/22 browser checks** (every demo step checked for fit at 1280 × 720 and 1920 × 1080).
+Result here: **36 passed** (about 100 s), including **22/22 browser checks** (every demo step checked for fit at 1280 × 720 and 1920 × 1080).
 
 | File | What it checks |
 |---|---|
