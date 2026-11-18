@@ -129,7 +129,13 @@ Writes `data/tuep/prepared/`: **one `sub-<patient>.npz` per patient** in prep.py
 epilepsy, N = no epilepsy), `status.csv` (what happened to each recording) and `prepare_settings.json`. Defaults:
 - at most 30 minutes per patient, recordings in session order (`--order spread` takes one per session in turn);
 - annotated seizures ± 60 s cut out (interictal EEG); `--include-seizures` only for a sensitivity analysis;
-- every piece prepared exactly as prep.py and trimmed to whole 4-s windows, so no evaluation window spans two pieces.
+- every piece prepared exactly as prep.py and trimmed to whole 4-s windows, so no evaluation window spans two pieces;
+- `--reserve-ids <file>`: TUH patient ids held out by another benchmark (the official TUSZ dev/eval patients,
+  including the three also in TUEP) go to `prepared/reserved/`, outside `subjects.csv`, so no recording of theirs is
+  ever used for training.
+
+Label review for patients added from TUSZ/TUEG: `app/study_protocol/epilepsy_label_review/` (what the NEDC guide
+says about the Y/N columns, the question to NEDC, the draft rules for the study neurologist, and the review form).
 
 Then train with the existing code, unchanged (from `experiments/`):
 
@@ -152,7 +158,7 @@ and file naming, the annotation file format, the spreadsheet's key columns, and 
 NODE_PATH=$(npm root -g) experiments/.venv/bin/python -m pytest app/tests -q
 ```
 
-Result here: **36 passed** (about 100 s), including **22/22 browser checks** (every demo step checked for fit at 1280 × 720 and 1920 × 1080).
+Result here: **37 passed** (about 100 s), including **22/22 browser checks** (every demo step checked for fit at 1280 × 720 and 1920 × 1080).
 
 | File | What it checks |
 |---|---|

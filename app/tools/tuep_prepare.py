@@ -113,7 +113,12 @@ def main(argv=None) -> int:
     ap.add_argument("--include-seizures", action="store_true", help="keep annotated seizures (sensitivity analysis only)")
     ap.add_argument("--order", choices=["chronological", "spread"], default="chronological")
     ap.add_argument("--patients", nargs="*", help="only these patient ids (testing)")
+    ap.add_argument("--reserve-ids", type=Path, help="file of TUH patient ids held out by another benchmark (e.g. the "
+                    "official TUSZ dev/eval patients). They are prepared into <out>/reserved/ and never enter "
+                    "subjects.csv, so run_experiment.py cannot train on any of their recordings")
     a = ap.parse_args(argv)
+    import re
+    reserved = set(re.split(r"[^a-z0-9]+", a.reserve_ids.read_text().lower())) - {""} if a.reserve_ids else set()
     inv = pd.read_csv(a.inventory / "inventory_recordings.csv")
     pats = pd.read_csv(a.inventory / "inventory_patients.csv")
     conflicts = set(pats.loc[pats.label_conflict, "patient_id"])
@@ -121,7 +126,9 @@ def main(argv=None) -> int:
     rx.WIN = int(round(4.0 * prep.SFREQ))
     budget_all = int(a.max_minutes_per_patient * 60 * prep.SFREQ)
     budget_all -= budget_all % rx.WIN
-    status, subjects, t0 = [], [], time.time()
+    status, subjects, held, t0 = [], [], [], time.time()
+    if reserved:
+        (a.out / "reserved").mkdir(exist_ok=True)
     for pid, r in inv.groupby("patient_id"):
         if a.patients and pid not in a.patients:
             continue
@@ -151,16 +158,27 @@ def main(argv=None) -> int:
         if not dls:
             continue
         sid = f"sub-{pid}"
-        np.savez_compressed(a.out / f"{sid}.npz", dl=np.concatenate(dls, 1), ms=np.concatenate(mss, 1), sfreq=prep.SFREQ,
+        is_reserved = pid.lower() in reserved
+        dest = a.out / "reserved" if is_reserved else a.out
+        np.savez_compressed(dest / f"{sid}.npz", dl=np.concatenate(dls, 1), ms=np.concatenate(mss, 1), sfreq=prep.SFREQ,
                             ch_names=np.array(prep.CHANNELS))
-        subjects.append({"participant_id": sid, "Group": r.group.iloc[0], "duration_s": round(used / prep.SFREQ, 1),
-                         "n_recordings": n_rec, "n_pieces": len(dls)})
+        (held if is_reserved else subjects).append({"participant_id": sid, "Group": r.group.iloc[0],
+                                                    "duration_s": round(used / prep.SFREQ, 1), "n_recordings": n_rec,
+                                                    "n_pieces": len(dls)})
+        if is_reserved:
+            for st in status:
+                if st["recording_path"] in set(r.path) and st["status"] == "prepared":
+                    st["status"], st["status_reason"] = "reserved", "held out by --reserve-ids; prepared in reserved/"
         print(f"{sid} ({r.group.iloc[0]}): {used / prep.SFREQ / 60:.1f} min from {n_rec} recording(s)", flush=True)
     pd.DataFrame(subjects).to_csv(a.out / "subjects.csv", index=False)
+    if reserved:
+        pd.DataFrame(held, columns=["participant_id", "Group", "duration_s", "n_recordings", "n_pieces"]).to_csv(
+            a.out / "reserved" / "subjects.csv", index=False)
     pd.DataFrame(status).to_csv(a.out / "status.csv", index=False)
     (a.out / "prepare_settings.json").write_text(json.dumps({
         **{k: (str(v) if isinstance(v, Path) else v) for k, v in vars(a).items()}, "window_samples": rx.WIN,
-        "sfreq": prep.SFREQ, "patients_prepared": len(subjects), "minutes": round((time.time() - t0) / 60, 2),
+        "sfreq": prep.SFREQ, "patients_prepared": len(subjects), "patients_reserved": len(held),
+        "reserved_ids_requested": sorted(reserved), "minutes": round((time.time() - t0) / 60, 2),
         "environment": rx.env_info()}, indent=2))
     print(f"done: {len(subjects)} patients -> {a.out}")
     return 0

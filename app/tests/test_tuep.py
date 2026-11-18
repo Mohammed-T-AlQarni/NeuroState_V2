@@ -147,3 +147,23 @@ def test_run_experiment_unchanged_splits_by_patient_and_converter_reads_inventor
     rec = pd.read_csv(tp_inv / "inventory_recordings.csv")
     assert d["cohort"]["recordings_processed"] == int((rec.status == "prepared").sum()) > 0
     assert d["cohort"]["unique_patients_training"] == info["patients"]
+
+
+def test_reserved_patients_never_enter_training(tree, inventory, tmp_path):
+    """Official held-out patients of another benchmark (e.g. TUSZ dev) are prepared apart, outside subjects.csv."""
+    from app.tools import tuep_prepare as tp
+    root, info = tree
+    inv, _, _ = inventory
+    ids = tmp_path / "tusz_dev_ids.txt"
+    ids.write_text(f"{fx.pid(0)}\n{fx.pid(11)}\n")
+    out = tmp_path / "prepared"
+    tp.main(["--root", str(root), "--inventory", str(inv), "--out", str(out), "--max-minutes-per-patient", "1",
+             "--reserve-ids", str(ids)])
+    subs = pd.read_csv(out / "subjects.csv")
+    held = pd.read_csv(out / "reserved" / "subjects.csv")
+    assert set(held.participant_id) == {f"sub-{fx.pid(0)}", f"sub-{fx.pid(11)}"}
+    assert not set(held.participant_id) & set(subs.participant_id) and len(subs) == info["patients"] - 2
+    assert not (out / f"sub-{fx.pid(0)}.npz").exists() and (out / "reserved" / f"sub-{fx.pid(0)}.npz").exists()
+    st = pd.read_csv(out / "status.csv")
+    # its seizure file has no piece left after the default 60-s margin: "excluded"; nothing is "prepared" for training
+    assert set(st.loc[st.recording_path.str.contains(fx.pid(0)), "status"]) <= {"reserved", "not_needed", "excluded"}
