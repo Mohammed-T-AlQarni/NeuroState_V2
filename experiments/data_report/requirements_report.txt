@@ -1,0 +1,8 @@
+# Packages for the EEG data report. Tested with: mne 1.13.2, numpy 2.5.4, pandas 3.1.1, openpyxl 3.1.5,
+# python-docx 1.2.0, reportlab 5.0.1 on Python 3.13 (code also parses on Python 3.9+).
+mne>=1.6
+numpy>=1.24
+pandas>=2.0
+openpyxl>=3.1
+python-docx>=1.1
+reportlab>=4.0
