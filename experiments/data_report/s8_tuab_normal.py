@@ -27,7 +27,9 @@ TUSZ_META = ["TUH/TUH_Additional/TUSZ_v2.0.6/DOCS/metadata_v06r.xlsx",
              "NeuroState_CNN_Seizure_Detection/data/TUSZ_v2.0.6/DOCS/metadata_v06r.xlsx"]
 # when a TUAB file has several identical local copies, report the first in this order
 PREFER = ["TUEG_partial", "TUEG_epilepsy_Y", "TUSZ_train", "TUSZ_dev", "TUSZ_eval", "TUEP_epilepsy", "TUEP_no_epilepsy",
-          "TUSZ_incomplete_copy", "other"]
+          "TUSZ_incomplete_copy", "TUAB_download", "other"]
+# TUAB normal recordings downloaded on 23 Nov 2026 (rsync from the TUH server), kept in their TUAB layout
+DOWNLOAD_REL = "New_TUH_Downloads/TUAB_v3.0.1_normal"
 
 
 def parse_listing(path: Path) -> list[dict]:
@@ -84,6 +86,10 @@ def main(args):
     # local EDF index: (name, size) -> paths. Walk the whole root except Claude_Workspace (read-only).
     man = C.read_csv(P["cache"] / "manifest_edf.csv")
     ds_of = {os.path.normcase(r["path"]): r["dataset"] for r in man}
+    dl_root = os.path.normcase(str(C.rel_path(DOWNLOAD_REL)))
+    def dataset_of(path):
+        p = os.path.normcase(path)
+        return "TUAB_download" if p.startswith(dl_root) else ds_of.get(p, "other")
     local, by_name = defaultdict(list), defaultdict(set)
     n_local = 0
     for dp, dns, fns in C.iter_tree(P["root"]):
@@ -98,14 +104,14 @@ def main(args):
                 by_name[fn.lower()].add(sz)
 
     def pick(paths):
-        return sorted(paths, key=lambda p: (PREFER.index(ds_of.get(os.path.normcase(p), "other")), p))[0]
+        return sorted(paths, key=lambda p: (PREFER.index(dataset_of(p)), p))[0]
 
     matched, name_only, multi = [], 0, 0
     for r in normal:
         hit = local.get((r["name"].lower(), r["size"]))
         if hit:
             multi += len(hit) > 1
-            matched.append(dict(r, path=pick(hit), local_dataset=ds_of.get(os.path.normcase(pick(hit)), "other")))
+            matched.append(dict(r, path=pick(hit), local_dataset=dataset_of(pick(hit))))
         elif r["name"].lower() in by_name:
             name_only += 1
     abn_matched = sum(1 for r in abnormal if (r["name"].lower(), r["size"]) in local)

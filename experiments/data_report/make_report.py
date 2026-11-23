@@ -15,6 +15,7 @@ NAMES = {
     "TUEP_epilepsy": "TUEP epilepsy", "TUEP_no_epilepsy": "TUEP no epilepsy",
     "TUEG_epilepsy_Y": "TUEG Epilepsy=Y set", "TUEG_partial": "TUEG partial",
     "TUSZ_incomplete_copy": "TUSZ incomplete copy",
+    "TUAB_download": "TUAB download (New_TUH_Downloads)",
 }
 REC_COLS = ["TUSZ_all", "TUEP_epilepsy", "TUEP_no_epilepsy", "TUEG_epilepsy_Y", "TUEG_partial"]
 
