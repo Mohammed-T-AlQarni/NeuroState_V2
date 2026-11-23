@@ -23,6 +23,9 @@ Other options: `--qc-n 400` (signal-check sample size, at least 200), `--workers
   columns are never written; categories with fewer than 5 rows are grouped; free text is reduced to keyword counts.
 - `privacy_check.py` (last step) scans the report and outputs for any patient code found on the drive and fails if one appears.
 - Per-file working tables (with file paths) go to `Claude_Workspace\cache\eeg_data_report` and must not be shared.
+- Step 8 writes `Claude_Workspace\inventory\tuab_normal_eeg_manifest.csv` and `tuab_normal_eeg_exclusions.csv`, which hold patient
+  codes and paths: keep them private. The TUAB listing (`inventory\tuab_v301_ls_lR.txt`) is made once with
+  `ssh nedc-tuh-eeg@www.isip.piconepress.com "ls -lR data/tuh_eeg/tuh_eeg_abnormal/v3.0.1/edf/"` (names and sizes only, no EEG download).
 
 ## Steps
 
@@ -35,8 +38,9 @@ Other options: `--qc-n 400` (signal-check sample size, at least 200), `--workers
 | 5 | `s5_signal_qc.py` | MNE signal check: flat / noisy / extreme channels, length vs header | stratified sample (default 400) |
 | 6 | `s6_external.py` | External_Datasets `.gz` and metadata CSVs | all files; amplitude on a sample |
 | 7 | `s7_overlaps.py` | patient overlaps between datasets, label conflicts | all files |
-| 8 | `make_report.py` | builds the .docx and .pdf from the outputs | |
-| 9 | `privacy_check.py` | scans report and outputs for patient codes | |
+| 8 | `s8_tuab_normal.py` | TUAB v3.0.1 normal-EEG files already on the drive (same name and size), minus patients in an epilepsy group or the TUEP controls; writes the private `normal_eeg` manifest | TUAB listing in `inventory\tuab_v301_ls_lR.txt` |
+| 9 | `make_report.py` | builds the .docx and .pdf from the outputs | |
+| 10 | `privacy_check.py` | scans report and outputs for patient codes | |
 
 ## Test without the real data
 

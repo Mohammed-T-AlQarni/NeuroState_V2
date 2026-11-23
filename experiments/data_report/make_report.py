@@ -106,7 +106,7 @@ class Doc:
 
 
 def build(J, P, sample_n):
-    s1, s2, s3, s4, s5, s6, s7 = (J.get(k, {}) for k in ("s1", "s2", "s3", "s4", "s5", "s6", "s7"))
+    s1, s2, s3, s4, s5, s6, s7, s8 = (J.get(k, {}) for k in ("s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"))
     H = g(s2, "by_dataset", default={})
     L = g(s3, "by_dataset", default={})
     I = g(s1, "datasets", default={})
@@ -140,6 +140,8 @@ def build(J, P, sample_n):
         f"with {n_(tusz.get('n_seizure_events'))} seizure events timed to the second in {n_(tusz.get('recordings_with_seizure'))} recordings ({n_(tusz.get('patients_with_seizure'))} patients).",
         f"Diagnosis labels: TUEP gives one label per patient: {n_(te.get('n_patients'))} epilepsy and {n_(tn.get('n_patients'))} no-epilepsy patients, "
         f"but {n_(te.get('n_edf'))} vs {n_(tn.get('n_edf'))} recordings ({ratio:.1f} to 1)" if ratio else "TUEP: see section 4.",
+        (f"Normal EEG (new): {n_(g(s8, 'final_files'))} TUAB recordings labelled normal from {n_(g(s8, 'final_patients'))} patients are already on the drive "
+         f"and belong to no epilepsy or control group (label normal_eeg; section 4)." if g(s8, "found") else None),
         f"Format is consistent: {pct(g(main, 'format', 'EDF', default=0), main.get('n_header_ok'), 0)} plain EDF; the 19 standard 10-20 electrodes are present in "
         f"{n_(main.get('all_19_standard_pct'))}% of files; sampling rates and reference montages vary and must be harmonised.",
         "Suggested plan: treat seizure detection (TUSZ) and epilepsy diagnosis (TUEP) as two tasks; pre-train on TUSZ, fine-tune on TUEP; split strictly by patient, "
@@ -387,6 +389,43 @@ def build(J, P, sample_n):
             D.table(["Group", "Rows matched"] + [f"{c} (rows)" for c in cols], rows,
                     note=f"Source: [all] rows of {s['file']}, sheet {s['sheet']} (session level). Values with fewer than 5 rows are grouped as 'other'.")
 
+    # TUAB normal EEG (step 8)
+    if g(s8, "found"):
+        D.h("TUAB normal-EEG recordings already on the drive (new cohort)", 2)
+        sp = g(s8, "tuab_normal_by_split", default={})
+        fs = g(s8, "final_by_split", default={})
+        ex = g(s8, "excluded", default={})
+        ov = g(s8, "overlap_raw", default={})
+        D.p(f"The TUH Abnormal EEG Corpus (TUAB v3.0.1) labels each recording normal or abnormal. Its file list (names and sizes only) was compared with "
+            f"the {n_(g(s8, 'local_edf_files_scanned'))} EDFs on the drive; a recording counts as present only when both the file name and the size match. "
+            "No TUAB files were downloaded.")
+        D.table(["Step", "Recordings", "Patients"], [
+            ["TUAB normal recordings (train / eval)", f"{n_(g(s8, 'tuab_normal_files'))} ({n_(g(sp, 'train', 'files'))} / {n_(g(sp, 'eval', 'files'))})",
+             f"{n_(g(s8, 'tuab_normal_patients'))} ({n_(g(sp, 'train', 'patients'))} / {n_(g(sp, 'eval', 'patients'))})"],
+            ["Already on the drive (same name and size)", n_(g(s8, "matched_files")), n_(g(s8, "matched_patients"))],
+            ["Excluded: in TUEP epilepsy or the TUEG Epilepsy=Y set", "", n_(ov.get("epilepsy_tuep_or_tuegY"))],
+            ["Excluded: in the TUEP no-epilepsy group (keeps the label no_epilepsy)", "", n_(ov.get("tuep_no_epilepsy"))],
+            ["Excluded: in the 295 TUSZ Epilepsy=Y patients" if g(s8, "tusz_y_list_available") else "TUSZ Epilepsy=Y list not available: count is provisional",
+             "", n_(ov.get("tusz_epilepsy_Y"))],
+            ["Excluded in total", n_(g(s8, "excluded_files")), n_(g(s8, "excluded_patients"))],
+            ["Final normal_eeg cohort (train / eval)", f"{n_(g(s8, 'final_files'))} ({n_(g(fs, 'train', 'files'))} / {n_(g(fs, 'eval', 'files'))})",
+             f"{n_(g(s8, 'final_patients'))} ({n_(g(fs, 'train', 'patients'))} / {n_(g(fs, 'eval', 'patients'))})"],
+        ], note="Source: [all] TUAB v3.0.1 file list and every EDF on the drive. Each patient is excluded once, in the order shown; no patient fits two exclusion rows.")
+        D.bullets([
+            f"Label: these recordings are labelled **normal_eeg** (a normal EEG reading), which is not the same as the clinical label **no_epilepsy** of the "
+            f"{n_(g(I, 'TUEP_no_epilepsy', 'n_patients'))} TUEP controls. Keep the two labels apart.",
+            f"Where the copies are: " + ", ".join(f"{NAMES.get(k, k)} {n_(v)}" for k, v in g(s8, "final_by_local_dataset", default={}).items())
+            + f" recordings. {n_(g(s8, 'matched_files_with_several_local_copies'))} matched recordings have more than one identical copy on the drive; the manifest lists one.",
+            f"The label covers only the TUAB recordings: the same {n_(g(s8, 'final_patients'))} patients have {n_(g(s8, 'final_patients_other_local_edfs'))} other EDFs on the drive "
+            "(other sessions in TUEG) that carry no normal/abnormal label.",
+            f"{n_(g(s8, 'final_patients_also_in_tusz'))} cohort patients also appear in TUSZ (not marked Epilepsy=Y), "
+            f"{n_(g(s8, 'final_patients_with_tusz_seizure'))} of them with a seizure annotated there. They are kept, but should be reviewed.",
+            f"Train and eval patients do not overlap ({n_(g(s8, 'final_patients_in_both_splits'))} in both). "
+            f"{n_(g(s8, 'name_match_but_size_differs'))} TUAB normal recordings have a local file with the same name but a different size; they were not counted. "
+            f"{n_(g(s8, 'not_on_drive_files'))} TUAB normal recordings are not on the drive.",
+            f"Patient-level manifest (patient codes and paths, keep private): {g(s8, 'manifest')}; excluded patients with reasons: {g(s8, 'exclusions_file')}.",
+        ])
+
     # external
     D.h("External datasets (reported separately)", 2)
     ext = g(s6, "datasets", default={})
@@ -600,7 +639,8 @@ def build(J, P, sample_n):
     D.bullets([
         f"Step 1 inventory: [all] files ({g(s1, 'seconds', default='n/a')} s). Step 2 EDF headers: [all] EDFs ({g(s2, 'seconds_reading', default='n/a')} s). "
         f"Step 3 labels: [all] .csv/.csv_bi of TUSZ and TUEP. Step 4 metadata: [all] spreadsheet rows. Step 5 signal QC: [sample] of {n_(sample_n)}. "
-        "Step 6 external: [all] .gz files, amplitude on a sample. Step 7 overlaps: [all].",
+        "Step 6 external: [all] .gz files, amplitude on a sample. Step 7 overlaps: [all]. "
+        "Step 8 TUAB normal EEG: [all] TUAB v3.0.1 file names and sizes vs every EDF on the drive.",
         "Scripts: Claude_Workspace\\reports\\scripts\\*.py. Raw totals: Claude_Workspace\\reports\\scripts\\outputs\\*.json. "
         "Per-file working tables with file paths are kept outside the report folder (Claude_Workspace\\cache\\eeg_data_report) and should not be shared.",
         "All data files were opened read-only; the scripts refuse to write anywhere outside Claude_Workspace.",
@@ -752,7 +792,7 @@ def main(args):
     log = C.Log(P["out"] / "run_log.txt")
     J = {}
     for k, f in (("s1", "s1_inventory"), ("s2", "s2_edf_headers"), ("s3", "s3_labels"), ("s4", "s4_metadata"),
-                 ("s5", "s5_signal_qc"), ("s6", "s6_external"), ("s7", "s7_overlaps"), ("meta", "run_meta")):
+                 ("s5", "s5_signal_qc"), ("s6", "s6_external"), ("s7", "s7_overlaps"), ("s8", "s8_tuab_normal"), ("meta", "run_meta")):
         p = P["out"] / f"{f}.json"
         if p.exists():
             J[k] = C.read_json(p)
