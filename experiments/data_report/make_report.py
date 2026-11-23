@@ -19,6 +19,11 @@ NAMES = {
 REC_COLS = ["TUSZ_all", "TUEP_epilepsy", "TUEP_no_epilepsy", "TUEG_epilepsy_Y", "TUEG_partial"]
 
 
+def pair_name(k: str) -> str:
+    """Display name for a dataset key used in the overlap checks (may be a 'A|B' union)."""
+    return "TUEP (both groups)" if k == "TUEP_epilepsy|TUEP_no_epilepsy" else NAMES.get(k, k)
+
+
 # ---------------------------------------------------------------- formatting helpers
 def n_(x):
     if x is None or x == "":
@@ -253,7 +258,7 @@ def build(J, P, sample_n):
     pe = g(H, "ALL_MAIN", "per_electrode_pct", default={})
     low = [f"{k} {v:.1f}%" for k, v in pe.items() if v < 99.5]
     D.p("Standard electrodes [all]: " + ("every one of the 19 (Fp1, Fp2, F7, F3, Fz, F4, F8, T3/T7, C3, Cz, C4, T4/T8, T5/P7, P3, Pz, P4, T6/P8, O1, O2) is present in at least 99.5% of files."
-                                        if not low else "electrodes missing from more than 0.5% of files: " + ", ".join(low) + "."))
+                                        if not low else "electrodes present in fewer than 99.5% of files (share of files that have them): " + ", ".join(low) + "."))
     labs = g(H, "ALL_MAIN", "channel_labels_pct_files", default=[])
     if labs:
         D.p("Most common channel names after removing the 'EEG ' prefix and the -REF/-LE suffix [all]: " +
@@ -303,9 +308,12 @@ def build(J, P, sample_n):
     # seizure types
     cb = g(s4, "seizure_type_codebook") or {}
     cbmap = {}
+    cols = [str(c).strip().lower() for c in cb.get("columns", [])]
+    i_code = cols.index("class code") if "class code" in cols else 0
+    i_name = cols.index("event name") if "event name" in cols else 1
     for r in cb.get("rows", []):
-        if len(r) >= 2 and r[0]:
-            cbmap[str(r[0]).strip().lower()] = str(r[1]).strip()
+        if len(r) > max(i_code, i_name) and r[i_code] and str(r[i_code]).strip().lower() != "nan":
+            cbmap[str(r[i_code]).strip().lower()] = str(r[i_name]).strip()
     rows = []
     tep_types = {t["type"]: t for t in L.get("TUEP_epilepsy", {}).get("seizure_types", [])}
     for t in tusz.get("seizure_types", []):
@@ -330,7 +338,7 @@ def build(J, P, sample_n):
     if ch:
         D.p("Patients who appear in more than one dataset [all] (same 8-letter TUH patient code). These must sit on the same side of every train/test split:")
         D.table(["Dataset A", "Dataset B", "Shared patients (found)", "Expected from earlier check"],
-                [[a["a"].replace("TUEP_epilepsy|TUEP_no_epilepsy", "TUEP (both groups)"), NAMES.get(a["b"], a["b"]), n_(a["found"]), n_(a["expected"])] for a in ch])
+                [[pair_name(a["a"]), pair_name(a["b"]), n_(a["found"]), n_(a["expected"])] for a in ch])
         sp = cf.get("tusz_split_overlap", {})
         D.bullets([
             f"TUSZ official splits share {n_(sum(sp.values()))} patients (train-dev {n_(sp.get('train_dev'))}, train-eval {n_(sp.get('train_eval'))}, dev-eval {n_(sp.get('dev_eval'))}).",
@@ -432,6 +440,8 @@ def build(J, P, sample_n):
         if not s.get("columns"):
             if s.get("error"):
                 D.p(f"{s['file']}: could not be read ({s['error']}).")
+            elif s.get("note"):
+                D.p(f"{s['file']}, sheet '{s.get('sheet')}': {n_(s.get('n_rows'))} rows, {n_(s.get('n_columns'))} columns; {s['note']}.")
             continue
         sig = (tuple(c["name"] for c in s["columns"]), s["n_rows"])
         if sig in seen:
@@ -478,7 +488,8 @@ def build(J, P, sample_n):
     hdr_fail = {k: H[k].get("n_header_failed", 0) for k in C.MAIN if k in H}
     D.p("Whole-dataset checks [all]:")
     D.bullets([
-        f"Unreadable headers: {n_(am.get('n_header_failed'))} of {n_(am.get('n_files'))} files (" + ", ".join(f"{NAMES[k]} {v}" for k, v in hdr_fail.items() if v) + ")."
+        f"Unreadable headers: {n_(am.get('n_header_failed'))} of {n_(am.get('n_files'))} files"
+        + (" (" + ", ".join(f"{NAMES[k]} {v}" for k, v in hdr_fail.items() if v) + ")" if any(hdr_fail.values()) else "") + "."
         + (f" Reasons: {', '.join(f'{a} ({b})' for a, b in am.get('fail_reasons', []))}." if am.get("fail_reasons") else ""),
         f"File size does not match the header: {n_(am.get('size_mismatch_files'))} files ({n_(am.get('size_truncated_files'))} shorter than the header says, i.e. truncated; "
         f"{n_(am.get('size_extra_bytes_files'))} with extra bytes); {n_(am.get('partial_record_files'))} end in a partial data record.",
@@ -551,7 +562,7 @@ def build(J, P, sample_n):
     D.bullets([
         "**Same patient in training and testing.** Split by patient, never by recording or window: windows from one patient are very similar, so a recording-level split mostly measures recognition of the person. "
         "TUEP patients often have several sessions. Carry the cross-dataset overlaps through every split: " +
-        "; ".join(f"TUEP and {NAMES.get(c['b'], c['b'])} share {n_(c['found'])} patients" for c in ch) +
+        "; ".join(f"{pair_name(c['a'])} and {pair_name(c['b'])} share {n_(c['found'])} patients" for c in ch) +
         ". If you pre-train on TUSZ, remove the shared patients from pre-training or keep them out of the TUEP test folds.",
         f"**Seizures make diagnosis too easy.** {n_(seiz_pat_tuep)} TUEP epilepsy patients have annotated seizures and the no-epilepsy group has {n_(tn.get('patients_with_seizure'))}. "
         "A model can learn 'seizure present' instead of 'epilepsy'. Cut annotated seizure stretches (plus a margin, e.g. 1 minute either side) out of the TUEP inputs, and report results separately for epilepsy patients with no seizure on record.",

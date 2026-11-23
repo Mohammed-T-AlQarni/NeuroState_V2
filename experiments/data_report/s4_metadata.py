@@ -242,6 +242,7 @@ def main(args):
             groups[r["dataset"]].add(r["pid"])
     extra = groups.get("TUEG_partial", set()) | groups.get("TUSZ_incomplete_copy", set())
     groups["TUSZ_all"] = groups.get("TUSZ_train", set()) | groups.get("TUSZ_dev", set()) | groups.get("TUSZ_eval", set())
+    all_pids = set().union(*groups.values()) if groups else set()   # every patient code on the drive
     groups = {k: v for k, v in groups.items() if k not in ("TUEG_partial", "TUSZ_incomplete_copy")}
     sheets, codebook = [], None
     for p in find_docs():
@@ -258,6 +259,13 @@ def main(args):
             if raw.dropna(how="all").empty:
                 continue
             hr = 2 if (p.name.lower().startswith("metadata_v06") and str(sh).upper() == "TUSZ") else detect_header(raw)
+            if any(pid_of(v) in all_pids for v in raw.iloc[hr].tolist()):
+                # the chosen "header" row holds a patient code, so the sheet has no header row and that row is
+                # patient data: never use its values as column names (they would end up in the outputs)
+                sheets.append(dict(file=p.name, folder=str(p.parent.relative_to(P["root"])), sheet=str(sh),
+                                   n_rows=int(len(raw.dropna(how="all"))), n_columns=int(raw.shape[1]),
+                                   note="no header row (the first rows are patient data), so it was not summarised"))
+                continue
             df = raw.iloc[hr + 1:].copy()
             df.columns = [str(x) if not (isinstance(x, float) and pd.isna(x)) else f"unnamed_{i}" for i, x in enumerate(raw.iloc[hr])]
             if p.name.lower().startswith("seizures_types"):

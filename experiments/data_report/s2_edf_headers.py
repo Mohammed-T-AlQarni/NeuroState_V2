@@ -179,7 +179,8 @@ def aggregate(rows, manifest_by_path):
         else:
             sex_missing += 1
         rs2 = sorted(rs, key=lambda r: (r["ses"], r["path"]))
-        a = next((num(r["age"], int) for r in rs2 if r["age"] != ""), None)
+        # first plausible age; TUH writes placeholders such as 999 when the age is unknown
+        a = next((x for x in (num(r["age"], int) for r in rs2 if r["age"] != "") if x is not None and 0 <= x <= 120), None)
         if a is None:
             age_missing += 1
         else:
