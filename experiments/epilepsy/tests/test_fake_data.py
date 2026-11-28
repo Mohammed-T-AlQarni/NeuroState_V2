@@ -132,7 +132,7 @@ def test_window_files(pkg):
         assert set(z19.files) == {"x", "x_ms", "start_s"}
         for k in ("x", "x_ms"):
             assert z19[k].dtype == np.float16 and z19[k].shape == (row.n_windows, 19, 512), (row.pid, k)
-            assert np.array_equal(z19[k][:, fd.IDX10], z10[k])  # 10-channel copy = same data, channel subset
+            assert np.array_equal(fd.ref10(z19[k]), z10[k])  # 10-channel copy: same windows, own average ref
         assert np.array_equal(z19["start_s"], z10["start_s"])
 
 

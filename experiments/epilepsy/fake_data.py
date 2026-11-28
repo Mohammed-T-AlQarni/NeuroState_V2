@@ -19,6 +19,7 @@ Choices the interface leaves open (made here, to be confirmed by the director):
       patients (group tusz_seiz) appear in meta.csv, the tusz_* split files and seizure/.
     - Nigeria and Guinea-Bissau have only 10-channel windows (their headset has no full 19-channel montage).
     - Windows are in microvolts (float16 cannot hold EEG in volts), as in experiments/prep.py.
+    - windows10 = the same windows, 10 shared channels, re-referenced to the average of those 10 (as preprocess.py).
     - t1 folds: StratifiedGroupKFold(5, shuffle=True, random_state=100*r) by patient;
       validation: stratified 15% of the training folds, random_state=100*r+f.
 """
@@ -94,6 +95,12 @@ def _bands(x):
 def _windows(x):
     n_ch, n = x.shape
     return x.reshape(n_ch, n // WIN, WIN).transpose(1, 0, 2).astype(np.float16)
+
+
+def ref10(w19):
+    """10-channel copy of 19-channel windows, re-referenced to the average of the 10 (as preprocess.py)."""
+    w = w19[:, IDX10].astype(np.float32)
+    return (w - w.mean(axis=1, keepdims=True)).astype(np.float16)
 
 
 def _save_npz(path, **arrays):
@@ -202,7 +209,7 @@ def write_package(out, seed=0):
             x, x_ms = _bands(_signal(rng, 19, n_win))
             w, w_ms = _windows(x), _windows(x_ms)
             _save_npz(out / "windows19" / row.group / f"{row.pid}.npz", x=w, x_ms=w_ms, start_s=start)
-            _save_npz(out / "windows10" / row.group / f"{row.pid}.npz", x=w[:, IDX10], x_ms=w_ms[:, IDX10], start_s=start)
+            _save_npz(out / "windows10" / row.group / f"{row.pid}.npz", x=ref10(w), x_ms=ref10(w_ms), start_s=start)
 
     labels = pat[pat.group != "tusz_seiz"][LABELS_COLS].sort_values("pid")
     labels.to_csv(out / "labels.csv", index=False)
