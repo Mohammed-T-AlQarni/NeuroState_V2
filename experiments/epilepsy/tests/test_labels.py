@@ -48,6 +48,10 @@ def drive(tmp_path_factory):
             (pid["ctl3"], "Y", "")], header_row=3)
     _sheet(root / "TUH/TUEP/DOCS/metadata_v00r.xlsx", "TUEP",
            [(pid["epi1"], "Y", ""), (pid["ctl1"], "N", ""), (pid["ctl2"], "Y", "")], header_row=1)
+    # TUEG metadata v19 (.xlsm): a normal-EEG patient with "seizure d/o" in free text and no Y
+    _sheet(root / "New_TUH_Downloads/metadata_v19.xlsm", "Sheet1",
+           [(pid["tueg1"], "Y", ""), (pid["tab2"], "N", "hx seizure d/o"), (pid["tab1"], "N", "headache")],
+           header_row=1)
     # TUAB normal manifest (tab1, tab2 train; tab3 eval; epi2 must be dropped: already in an epilepsy group)
     inv = root / "Claude_Workspace/inventory"
     inv.mkdir(parents=True)
@@ -91,13 +95,14 @@ def built(drive):
 def test_groups(built):
     _, pid, c, _, _, _ = built
     g = c.group.to_dict()
-    assert g[pid["epi1"]] == "tuep_epi" and g[pid["ctl3"]] == "tuep_ctrl"
+    assert g[pid["epi1"]] == "tuep_epi" and g[pid["ctl1"]] == "tuep_ctrl"
     assert g[pid["tueg2"]] == "tueg_y"                       # TUEG Y wins over TUSZ Y
     assert g[pid["szY1"]] == "tusz_y" and g[pid["szY2"]] == "tusz_y"   # Y in any session
     assert g[pid["szN1"]] == "tusz_seiz"                     # TUSZ, no diagnosis group: stage 1 only
     assert g[pid["tab1"]] == "tuab_train" and g[pid["tab3"]] == "tuab_eval"
     assert g[pid["epi2"]] == "tuep_epi"                      # never normal_eeg
-    assert g[pid["szN2"]] == "tuab_eval"                     # TUAB normal beats stage-1-only
+    for k in ("ctl2", "ctl3", "szN2", "tab2"):              # label conflicts: excluded from everything
+        assert pid[k] not in g, k
     assert c.label[pid["szN1"]] is None or pd.isna(c.label[pid["szN1"]])
     assert g["ng0001"] == "nigeria" and c.label["ng0001"] == "epilepsy"
     assert c.label["ng0002"] == "no_epilepsy" and "ng0003" not in g   # no signal file -> not a patient
@@ -120,19 +125,24 @@ def test_recordings(built):
     assert set(d.group[d.pid == pid["szY1"]]) == {"tusz_y"}
     s = recs[recs.role == "seizure"]
     assert pid["epi1"] not in set(s.pid)                      # TUEP patients never in stage 1
-    assert {pid["szY1"], pid["szN1"], pid["tueg2"], pid["szY2"], pid["szN2"]} <= set(s.pid)
+    assert {pid["szY1"], pid["szN1"], pid["tueg2"], pid["szY2"]} <= set(s.pid)
+    assert pid["szN2"] not in set(recs.pid)                  # excluded patients have no recordings at all
     assert set(d.path[d.pid == "ng0002"].map(lambda p: p.split("signal-")[1])) == {"2-1.csv.gz"}   # first session
     first = d[d.pid == pid["epi1"]].sort_values(["ses", "tok"]).iloc[0]
     assert first.ses == "s001" and first.year == 2010 and first.montage == "02_tcp_le"
 
 
-def test_conflicts_flagged_not_resolved(built):
-    _, pid, c, _, conflicts, _ = built
+def test_conflicts_excluded_and_counted(built):
+    _, pid, c, _, conflicts, info = built
     issues = {(r.pid, r.issue) for r in conflicts.itertuples()}
     assert (pid["ctl2"], "Epilepsy = Y in TUEP metadata_v00r") in issues
     assert (pid["ctl3"], "Epilepsy = Y in TUSZ metadata_v06r") in issues
-    assert any(p == pid["szN2"] and "free text" in i for p, i in issues)
-    assert c.group[pid["ctl2"]] == "tuep_ctrl"                # flagged, label unchanged
+    assert (pid["szN2"], "free text in TUSZ metadata_v06r mentions epilepsy") in issues
+    assert (pid["tab2"], "free text in TUEG metadata_v19 mentions epilepsy") in issues
+    assert not any(p == pid["tab1"] for p, _ in issues)       # free text without epilepsy words: kept
+    assert info["excluded_for_conflicts"] == {"tuep_ctrl": 2, "tuab_eval": 1, "tuab_train": 1}
+    assert set(conflicts.group) == {"tuep_ctrl", "tuab_eval", "tuab_train"}
+    assert "TUEG metadata_v19" in info["metadata_sheets_read"]
 
 
 def test_meta_and_write(built, tmp_path):

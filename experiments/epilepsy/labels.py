@@ -8,12 +8,17 @@ Sources (read-only, under --root, default G:\\NeuroState):
     TUAB v3.0.1 normal    Claude_Workspace/inventory/tuab_normal_eeg_manifest.csv (train / eval split) and
                           the TUAB listing (every normal recording, for T3)
     TUEP metadata         TUH/TUEP/DOCS/metadata_v00r.xlsx (only for the conflict check)
+    TUEG metadata v19     New_TUH_Downloads/metadata_v19.xlsm (only for the conflict check; the 23 Nov scan's source)
     seizure times         the .csv_bi next to each TUSZ / TUEP EDF (seizure_cut.py)
     Nigeria, G.-Bissau    External_Datasets/metadata_*.csv and EEGs_*/ signal CSVs
 
 Rules: every patient once. Group priority: tuep_epi, tuep_ctrl, tueg_y, tusz_y, tuab_train / tuab_eval, tusz_seiz
-(TUSZ patients in no diagnosis group: stage 1 only). A patient in an epilepsy group is never normal_eeg. Label
-conflicts are flagged, never resolved, in the local file label_conflicts.csv.
+(TUSZ patients in no diagnosis group: stage 1 only). A patient in an epilepsy group is never normal_eeg.
+Label conflicts (team decision 28 Nov) are EXCLUDED from everything (labels, splits, stage 1) and listed in the
+local file label_conflicts.csv; the console shows only the number per group. A conflict is: a TUEP control or a
+normal-EEG patient with Epilepsy = Y in any metadata sheet; a TUEP control or normal-EEG patient whose free text
+('Other Diagnosis') mentions epilepsy in a row without Y; a TUAB patient in both TUAB splits; a TUEP control in the
+TUEG Epilepsy = Y folder. Free text is never used as a label, only to exclude.
 
 Outputs:
     <out>/labels.csv, <out>/meta.csv                      (package files: patient codes, never in git)
@@ -51,6 +56,7 @@ REL = dict(
     tueg_y="TUH/TUH_Additional/TUEG_v2.0.2/epilepsy_Y/edf",
     tusz="NeuroState_CNN_Seizure_Detection/data/TUSZ_v2.0.6/edf",
     tusz_meta="TUH/TUH_Additional/TUSZ_v2.0.6/DOCS/metadata_v06r.xlsx",
+    tueg_meta="New_TUH_Downloads/metadata_v19.xlsm",
     tuab_manifest="Claude_Workspace/inventory/tuab_normal_eeg_manifest.csv",
     tuab_listing="Claude_Workspace/inventory/tuab_v301_ls_lR.txt",
     ext="External_Datasets",
@@ -60,7 +66,7 @@ RE_EDF = re.compile(r"^(?P<pid>[a-z]{8})_(?P<ses>s\d{3})_(?P<tok>t\d{3})\.edf$",
 RE_SES = re.compile(r"^s\d{3}_(\d{4})$", re.I)
 RE_MONTAGE = re.compile(r"^\d{2}_tcp_[a-z_]+$", re.I)
 RE_PID = re.compile(r"(?<![a-z])([a-z]{8})(?![a-z])")
-EPILEPSY_WORDS = re.compile(r"epilep|seizure disorder", re.I)
+EPILEPSY_WORDS = re.compile(r"epilep|seizure disorder|\bsz d/o\b|\bseizure d/o\b", re.I)   # as the 23 Nov scan
 
 
 # ----------------------------------------------------------------------------------------------- readers
@@ -89,9 +95,16 @@ def tuep_patients(root) -> dict[str, str]:
     return out
 
 
-def read_metadata_sheet(path, sheet) -> pd.DataFrame | None:
-    """TUH metadata workbook -> DataFrame with pid, epilepsy (Y/N/...), other (free text). Finds the header row."""
+def read_metadata_sheet(path, sheet=None) -> pd.DataFrame | None:
+    """TUH metadata workbook -> DataFrame with pid, epilepsy (Y/N/...), other (free text). Finds the header row;
+    sheet=None takes the first sheet that has an 'Epilepsy' column."""
     if not Path(path).is_file():
+        return None
+    if sheet is None:
+        for name in pd.ExcelFile(path).sheet_names:
+            df = read_metadata_sheet(path, name)
+            if df is not None:
+                return df
         return None
     raw = pd.read_excel(path, sheet_name=sheet, header=None, dtype=str)
     hdr = next((i for i in range(min(10, len(raw)))
@@ -101,7 +114,9 @@ def read_metadata_sheet(path, sheet) -> pd.DataFrame | None:
     cols = [str(c).strip().lower() for c in raw.iloc[hdr]]
     df = raw.iloc[hdr + 1:].copy()
     df.columns = cols
-    idc = next(c for c in cols if "subject" in c)
+    idc = next((c for c in cols if "subject" in c), None)
+    if idc is None:
+        return None
     other = next((c for c in cols if c.startswith("other diagnosis")), None)
     pid = df[idc].astype(str).str.lower().map(lambda s: (m.group(1) if (m := RE_PID.search(s)) else None))
     return pd.DataFrame({"pid": pid, "epilepsy": df["epilepsy"].astype(str).str.strip().str.upper(),
@@ -233,26 +248,31 @@ def build(root, read_headers=True):
     for p in sorted(tusz_split):
         group.setdefault(p, "tusz_seiz")
 
-    # conflicts (flagged, never resolved)
+    # label conflicts: listed in label_conflicts.csv and EXCLUDED from everything (team decision 28 Nov)
+    tueg_meta = read_metadata_sheet(root / REL["tueg_meta"])
+    info["metadata_sheets_read"] = [n for n, m in (("TUEP metadata_v00r", tuep_meta), ("TUSZ metadata_v06r", tusz_meta),
+                                                   ("TUEG metadata_v19", tueg_meta)) if m is not None]
+    neg = ("tuep_ctrl", "tuab_train", "tuab_eval")
     conflicts = []
-    meta_y = set()
-    for name, m in (("TUEP metadata_v00r", tuep_meta), ("TUSZ metadata_v06r", tusz_meta)):
+    for name, m in (("TUEP metadata_v00r", tuep_meta), ("TUSZ metadata_v06r", tusz_meta), ("TUEG metadata_v19", tueg_meta)):
         if m is None:
             continue
         for p in sorted(set(m.pid[m.epilepsy == "Y"])):
-            meta_y.add(p)
-            if group.get(p) == "tuep_ctrl":
-                conflicts.append(dict(pid=p, group="tuep_ctrl", issue=f"Epilepsy = Y in {name}"))
-        for p, txt in zip(m.pid, m.other):
-            if group.get(p) in ("tuab_train", "tuab_eval") and EPILEPSY_WORDS.search(txt or ""):
+            if group.get(p) in neg:
+                conflicts.append(dict(pid=p, group=group[p], issue=f"Epilepsy = Y in {name}"))
+        for p, ep, txt in zip(m.pid, m.epilepsy, m.other):
+            if group.get(p) in neg and ep != "Y" and EPILEPSY_WORDS.search(txt or ""):
                 conflicts.append(dict(pid=p, group=group[p], issue=f"free text in {name} mentions epilepsy"))
-    for p in sorted(p for p, g in group.items() if g in ("tuab_train", "tuab_eval") and p in meta_y):
-        conflicts.append(dict(pid=p, group=group[p], issue="Epilepsy = Y in a metadata sheet"))
     for p in sorted(p for p, g in group.items() if g == "tuab_conflict"):
         conflicts.append(dict(pid=p, group=g, issue="TUAB normal in both train and eval split"))
     for p in sorted(p for p, g in group.items() if g == "tuep_ctrl" and p in tueg_y):
         conflicts.append(dict(pid=p, group=g, issue="TUEP control in the TUEG Epilepsy = Y folder"))
     conflicts = pd.DataFrame(conflicts, columns=["pid", "group", "issue"]).drop_duplicates()
+    excluded = set(conflicts.pid)
+    info["excluded_for_conflicts"] = dict(Counter(group[p] for p in excluded))
+    info["conflict_issues"] = dict(Counter(conflicts.issue)) if len(conflicts) else {}
+    for p in excluded:
+        del group[p]
 
     # recordings per patient: from the patient's group source only ("diag"); TUSZ files also as "seizure"
     recs = []
@@ -267,6 +287,8 @@ def build(root, read_headers=True):
     for s in TUSZ_SPLITS:
         for r in tusz_recs[s]:
             g = group.get(r["pid"])
+            if g is None:      # excluded for a label conflict: not even in stage 1
+                continue
             if g == "tusz_y":
                 recs.append(dict(r, group=g, role="diag", split=s))
             if g not in ("tuep_epi", "tuep_ctrl"):
@@ -299,7 +321,6 @@ def build(root, read_headers=True):
     if not cohort.pid.is_unique:
         raise AssertionError("a patient appears twice in the cohort")
     info["patients_without_recordings"] = dict(Counter(cohort.group[(cohort.n_recordings == 0) & (cohort.group != "tusz_seiz")]))
-    info["conflicts"] = dict(Counter(conflicts.issue)) if len(conflicts) else {}
     return cohort, recs, conflicts, info
 
 
@@ -367,7 +388,8 @@ def main():
     meta = make_meta(cohort, recs, read_headers=not a.no_headers)
     write(cohort, recs, conflicts, meta, a.out, a.work)
     print(summary(cohort, recs, info))
-    print(f"label conflicts flagged: {len(conflicts)} (details in {Path(a.work) / 'label_conflicts.csv'}, local only)")
+    print(f"label conflicts: {conflicts.pid.nunique()} patients excluded from everything "
+          f"(details in {Path(a.work) / 'label_conflicts.csv'}, local only)")
 
 
 if __name__ == "__main__":
