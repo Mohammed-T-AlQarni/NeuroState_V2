@@ -57,10 +57,12 @@ def tuh_labels(chans=CH19, suffix="-LE", extra=("EKG1", "T1"), order_seed=None):
 
 
 def write_tuh_edf(path, seconds=600, sfreq=256, suffix="-LE", drop=(), extra=("EKG1", "T1"), spike_at=None,
-                  order_seed=1, flat=(), zero_start_s=0, common_start_s=0, **kw):
+                  order_seed=1, flat=(), zero_start_s=0, common_start_s=0, spike_uv=500.0, photic=None, **kw):
     """A TUH-like EDF: the 19 electrodes (shuffled order, given suffix) + extra channels. Electrode k (in CH19
-    order) carries a sine at 2 + k Hz. spike_at: (second, channel) of a 500 uV artefact; flat: electrodes set to 0;
-    zero_start_s: every channel 0 for the first seconds (as some TUH files start)."""
+    order) carries a sine at 2 + k Hz. spike_at: (second, channel) of a 1-s, 5 Hz burst of `spike_uv` peak-to-peak;
+    flat: electrodes set to 0; zero_start_s: every channel 0 for the first seconds (as some TUH files start);
+    photic: None (no photic channel), "idle" (a photic channel with noise only) or (start, stop) seconds of
+    10 Hz, 100 uV stimulation pulses."""
     chans = [c for c in CH19 if c not in drop]
     data = sines(len(CH19), seconds, sfreq)
     for c in flat:
@@ -72,7 +74,8 @@ def write_tuh_edf(path, seconds=600, sfreq=256, suffix="-LE", drop=(), extra=("E
         data[:, :n] = data[0, :n] * 5
     if spike_at is not None:
         s, ch = spike_at
-        data[ch, int(s * sfreq): int((s + 0.5) * sfreq)] += 500.0
+        i0, n = int(s * sfreq), int(sfreq)
+        data[ch, i0:i0 + n] += spike_uv / 2 * np.sin(2 * np.pi * 5 * np.arange(n) / sfreq)
     rows = {c: data[k] for k, c in enumerate(CH19)}
     names = [f"EEG {c}{suffix}" for c in chans]
     perm = np.random.default_rng(order_seed).permutation(len(chans))
@@ -81,6 +84,14 @@ def write_tuh_edf(path, seconds=600, sfreq=256, suffix="-LE", drop=(), extra=("E
     for e in extra:
         names.append(f"EEG {e}{suffix}")
         sig.append(np.random.default_rng(5).standard_normal(len(sig[0])) * 50)
+    if photic is not None:
+        ph = np.random.default_rng(6).standard_normal(len(sig[0])) * 0.5
+        if photic != "idle":
+            t = np.arange(len(ph)) / sfreq
+            on = (t >= photic[0]) & (t < photic[1])
+            ph[on] += 100.0 * ((t[on] * 10) % 1 < 0.2)
+        names.append("PHOTIC-REF")
+        sig.append(ph)
     return write_edf(path, np.stack(sig), sfreq, names, **kw)
 
 

@@ -27,7 +27,7 @@ def test_map_channels_le_and_extra():
 
 @pytest.fixture
 def settings():
-    return P.Settings(minutes=2, missing="drop")
+    return P.Settings(minutes=2)          # team defaults otherwise: interpolate 1-2, 300 uV, photic removal
 
 
 @pytest.mark.parametrize("suffix", ["-LE", "-REF"])
@@ -66,11 +66,54 @@ def test_amplitude_rejection(tmp_path, settings):
     assert res.stats["windows_bad_amplitude"] >= 1
 
 
-def test_flat_electrode_found_before_average_reference(tmp_path, settings):
-    # a flat F4 is not flat after the average reference; it must still be caught
+def test_amplitude_limit_300(tmp_path, settings):
+    # diagnosis windows: a 200 uV burst is kept, a 400 uV burst is dropped (limit 300 uV peak-to-peak)
+    e1 = write_tuh_edf(tmp_path / edf_name(fake_pid(14)), seconds=300, spike_at=(30.0, 0), spike_uv=200)
+    e2 = write_tuh_edf(tmp_path / edf_name(fake_pid(15)), seconds=300, spike_at=(30.0, 0), spike_uv=400)
+    r1 = P.process_patient([{"path": str(e1)}], settings)
+    r2 = P.process_patient([{"path": str(e2)}], settings)
+    assert 28.0 in set(r1.start_s.tolist()) and r1.stats["windows_bad_amplitude"] == 0
+    assert 28.0 not in set(r2.start_s.tolist()) and r2.stats["windows_bad_amplitude"] >= 1
+
+
+def test_whole_recording_flat_electrode_is_interpolated(tmp_path, settings):
+    # a flat F4 is not flat after the average reference; it is found before it and treated as missing
     edf = write_tuh_edf(tmp_path / edf_name(fake_pid(11)), seconds=300, flat=("F4",))
     res = P.process_patient([{"path": str(edf)}], settings)
-    assert res.n_windows == 0 and res.stats["windows_flat"] == 75
+    assert res.n_windows == 30 and res.stats["electrodes_interpolated"] == 1
+    assert res.stats["recordings_interpolated"] == 1 and res.stats["windows_flat"] == 0
+    # a flat electrode with missing="drop" drops the recording
+    r2 = P.process_patient([{"path": str(edf)}], P.Settings(minutes=2, missing="drop"))
+    assert r2.n_windows == 0 and r2.stats["skip_missing_electrode"] == 1
+
+
+def test_three_missing_or_flat_electrodes_drop_the_recording(tmp_path, settings):
+    e1 = write_tuh_edf(tmp_path / edf_name(fake_pid(16)), seconds=300, flat=("F4", "C3", "O1"))
+    e2 = write_tuh_edf(tmp_path / edf_name(fake_pid(17)), seconds=300, drop=("CZ",), flat=("F4", "O1"))
+    for e in (e1, e2):
+        res = P.process_patient([{"path": str(e)}], settings)
+        assert res.n_windows == 0 and res.stats["skip_too_many_missing"] == 1
+    e3 = write_tuh_edf(tmp_path / edf_name(fake_pid(18)), seconds=300, drop=("CZ",), flat=("F4",))
+    res = P.process_patient([{"path": str(e3)}], P.Settings(minutes=2, ptp_uv=1000))
+    assert res.n_windows == 30 and res.stats["electrodes_interpolated"] == 2
+
+
+def test_photic_windows_dropped_only_when_active(tmp_path):
+    st = P.Settings(minutes=10)                    # look at every window of the 5-minute file
+    stim = write_tuh_edf(tmp_path / edf_name(fake_pid(19)), seconds=300, photic=(100, 130))
+    idle = write_tuh_edf(tmp_path / edf_name(fake_pid(20)), seconds=300, photic="idle")
+    none = write_tuh_edf(tmp_path / edf_name(fake_pid(21)), seconds=300)
+    r = P.process_patient([{"path": str(stim)}], st)
+    s = r.start_s
+    assert not ((s > 86) & (s < 140)).any()       # stimulation 100-130 s, +/- 10 s
+    assert r.stats["windows_photic"] == 13 and r.stats["recordings_with_stimulation"] == 1
+    r = P.process_patient([{"path": str(idle)}], st)
+    assert r.stats["windows_photic"] == 0 and r.stats["recordings_with_photic_channel"] == 1
+    assert r.stats["recordings_with_stimulation"] == 0 and r.n_windows == 75
+    r = P.process_patient([{"path": str(none)}], st)
+    assert r.stats["windows_photic"] == 0 and r.stats["recordings_with_photic_channel"] == 0
+    r = P.process_patient([{"path": str(stim)}], P.Settings(minutes=10, photic=False))
+    assert r.stats["windows_photic"] == 0 and r.n_windows == 75
 
 
 def test_zero_padded_start_dropped(tmp_path, settings):
@@ -114,11 +157,16 @@ def test_minutes_across_recordings(tmp_path):
     assert res.stats["recordings_used"] == 2 and res.stats["recordings_read"] == 2  # third not opened
 
 
-def test_settings_need_decisions():
+def test_settings_defaults_are_the_team_decisions():
+    s = P.Settings()
+    assert (s.minutes, s.missing, s.max_interp, s.ptp_uv, s.flat_uv, s.photic, s.photic_margin_s) == \
+        (5.0, "interpolate", 2, 300.0, 0.5, True, 10.0)
+    d = s.as_dict()
+    assert d["ptp_uv"] == 300.0 and d["photic_removal"] is True and d["max_interp"] == 2
     with pytest.raises(ValueError):
         P.Settings(minutes=5, missing="maybe")
     with pytest.raises(ValueError):
-        P.Settings(minutes=0, missing="drop")
+        P.Settings(minutes=0)
 
 
 def test_emotiv_csv(tmp_path):
