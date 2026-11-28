@@ -225,7 +225,11 @@ def write_package(out, seed=0):
             "preprocessing": {"sfreq": SFREQ, "window_s": 4, "window_samples": WIN, "overlap": 0,
                               "reference": "average", "channels19": CH19, "channels10": CH10,
                               "band_x_hz": list(BAND_X), "band_x_ms_hz": list(BAND_MS),
-                              "dtype": "float16", "units": "uV"}}
+                              "dtype": "float16", "units": "uV", "channels10_reference": "average of the 10 channels",
+                              # the real package's cleaning settings (team decisions 28 Nov), for the same keys
+                              "minutes": 5.0, "missing": "interpolate", "max_interp": 2, "ptp_uv": 300.0,
+                              "flat_uv": 0.5, "photic_removal": True, "photic_margin_s": 10.0,
+                              "seizure_margin_s": 60.0}}
     with open(out / "PACKAGE_INFO.json", "w") as f:
         json.dump(info, f, indent=2)
 

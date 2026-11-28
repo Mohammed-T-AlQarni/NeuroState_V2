@@ -4,9 +4,11 @@ Steps, in order: labels.py (labels.csv, meta.csv) -> splits.py (splits/) -> prep
 (windows19/, windows10/, seizure/) -> meta.csv window counts -> PACKAGE_INFO.json -> MANIFEST.sha256.
 One recording set (patient) per process, all CPU cores by default.
 
-Build (PC1 only, needs the raw TUH files; --minutes and --missing have no default: team decisions):
+Build (PC1 only, needs the raw TUH files). Defaults = the team decisions of 28 Nov: 5 clean minutes per patient,
+1-2 missing / flat electrodes interpolated (3+ dropped), 300 uV diagnosis windows / 1,000 uV stage 1, flat 0.5 uV,
+photic stimulation +/- 10 s removed; all of them are written into PACKAGE_INFO.json:
     python -m experiments.epilepsy.package --out %NS_DATA% --work %NS_WORKSPACE%\\epilepsy\\work ^
-        --minutes 5 --missing drop [--groups tuep_epi,tuep_ctrl,seizure] [--workers 10] [--expect]
+        [--groups tuep_epi,tuep_ctrl,seizure] [--workers 10] [--expect]
 
 Verify a copied package (every PC, after the SSD arrives):
     python -m experiments.epilepsy.package --verify <folder>
@@ -164,14 +166,23 @@ def build_tasks(cohort, recs, splits, out, settings: P.Settings, groups, interva
     return diag, stage1
 
 
-def aggregate(results):
+def aggregate(results, target_windows=None):
+    """Per group sums of the per-patient stats, plus patients with fewer than the target clean minutes."""
     agg = defaultdict(Counter)
     for r in results:
         agg[r["group"]]["patients"] += 1
         agg[r["group"]]["patients_with_windows"] += int(r["n_windows"] > 0)
+        if target_windows:
+            agg[r["group"]]["patients_under_target_minutes"] += int(0 < r["n_windows"] < target_windows)
         for k, v in r["stats"].items():
             agg[r["group"]][k] += v
-    return {g: dict(v) for g, v in sorted(agg.items())}
+    out = {g: dict(v) for g, v in sorted(agg.items())}
+    for v in out.values():   # shares of the windows looked at
+        seen = v.get("windows_seen") or 0
+        for k in ("windows_photic", "windows_bad_amplitude", "windows_flat", "windows_seizure"):
+            if k in v and seen:
+                v[f"share_{k}"] = round(v[k] / seen, 4)
+    return out
 
 
 def run(root, out, work, settings: P.Settings, groups=ALL_GROUPS, workers=None, expect=False,
@@ -217,7 +228,7 @@ def run(root, out, work, settings: P.Settings, groups=ALL_GROUPS, workers=None, 
     meta["sfreq_orig"] = [sf.get(p, v) for p, v in zip(meta.pid, meta.sfreq_orig)]
     meta.sort_values("pid").to_csv(out / "meta.csv", index=False)
 
-    stats = dict(windows=aggregate(res_d), seizure=aggregate(res_s))
+    stats = dict(windows=aggregate(res_d, settings.n_windows), seizure=aggregate(res_s))
     pinfo = dict(fake=False, code_commit=_code_commit(), date=datetime.now().isoformat(timespec="seconds"),
                  groups_built=list(groups), counts_per_group=cohort.group.value_counts().to_dict(),
                  split_counts=found, expect_mismatches=mismatches, preprocessing=settings.as_dict(),
@@ -225,7 +236,8 @@ def run(root, out, work, settings: P.Settings, groups=ALL_GROUPS, workers=None, 
                  seizure_margin_s=settings.seizure_margin_s, stage1_intervals_file=bool(intervals_csv),
                  stats=stats, workers=workers,
                  seconds=dict(labels_splits=round(t1 - t0, 1), windows=round(t2 - t1, 1), seizure=round(t3 - t2, 1)),
-                 n_label_conflicts=int(len(conflicts)))
+                 n_label_conflicts=int(len(conflicts)),
+                 excluded_for_conflicts=info.get("excluded_for_conflicts", {}))
     with open(out / "PACKAGE_INFO.json", "w") as f:
         json.dump(pinfo, f, indent=2, default=lambda o: o.item() if hasattr(o, "item") else str(o))
     n = write_manifest(out)
@@ -239,11 +251,15 @@ def main():
     ap.add_argument("--root", default=r"G:\NeuroState")
     ap.add_argument("--out", help="new, empty package folder (NS_DATA)")
     ap.add_argument("--work", help="local working folder (cohort, recordings, conflicts)")
-    ap.add_argument("--minutes", type=float, help="clean minutes per patient (required for a build)")
-    ap.add_argument("--missing", choices=["drop", "interpolate"], help="files missing an electrode (required)")
+    ap.add_argument("--minutes", type=float, default=5.0, help="clean minutes per patient (default 5)")
+    ap.add_argument("--missing", choices=["drop", "interpolate"], default="interpolate",
+                    help="interpolate 1-2 missing / flat electrodes, drop 3+ (default); or drop any")
+    ap.add_argument("--max-interp", type=int, default=P.DEFAULT_MAX_INTERP)
     ap.add_argument("--groups", default=",".join(ALL_GROUPS), help=f"comma list of {ALL_GROUPS}")
     ap.add_argument("--ptp-uv", type=float, default=P.DEFAULT_PTP_UV)
     ap.add_argument("--flat-uv", type=float, default=P.DEFAULT_FLAT_UV)
+    ap.add_argument("--no-photic", action="store_true", help="keep photic-stimulation windows (not the decision)")
+    ap.add_argument("--photic-margin", type=float, default=P.DEFAULT_PHOTIC_MARGIN_S)
     ap.add_argument("--seizure-ptp-uv", type=float, default=DEFAULT_SEIZURE_PTP_UV)
     ap.add_argument("--intervals", help="CSV path,start_s,stop_s of extra seizure intervals (stage 1 detector)")
     ap.add_argument("--workers", type=int, default=None)
@@ -259,15 +275,16 @@ def main():
         n = sum(1 for _ in open(Path(a.verify) / "MANIFEST.sha256"))
         print(f"verify OK: {n} files match MANIFEST.sha256")
         return
-    if not (a.out and a.work and a.minutes and a.missing):
-        ap.error("a build needs --out, --work, --minutes and --missing")
+    if not (a.out and a.work):
+        ap.error("a build needs --out and --work")
     for p in (a.out, a.work):
         L._guard(p, a.root)
     groups = [g.strip() for g in a.groups.split(",") if g.strip()]
     bad = set(groups) - set(ALL_GROUPS)
     if bad:
         ap.error(f"unknown groups: {sorted(bad)}")
-    st = P.Settings(minutes=a.minutes, missing=a.missing, ptp_uv=a.ptp_uv, flat_uv=a.flat_uv)
+    st = P.Settings(minutes=a.minutes, missing=a.missing, ptp_uv=a.ptp_uv, flat_uv=a.flat_uv,
+                    max_interp=a.max_interp, photic=not a.no_photic, photic_margin_s=a.photic_margin)
     run(a.root, a.out, a.work, st, groups, a.workers, a.expect, a.intervals, a.seizure_ptp_uv)
 
 

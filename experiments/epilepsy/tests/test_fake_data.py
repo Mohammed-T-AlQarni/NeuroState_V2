@@ -157,6 +157,7 @@ def test_package_info(pkg):
     pp = info["preprocessing"]
     assert pp["sfreq"] == 128 and pp["window_samples"] == 512 and pp["dtype"] == "float16"
     assert pp["channels19"] == fd.CH19 and pp["channels10"] == fd.CH10
+    assert pp["ptp_uv"] == 300.0 and pp["missing"] == "interpolate" and pp["photic_removal"] is True
 
 
 def test_same_seed_same_package(pkg, tmp_path):
